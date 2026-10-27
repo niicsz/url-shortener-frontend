@@ -2,239 +2,442 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatInputModule } from '@angular/material/input';
-import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
-import { MatSnackBar } from '@angular/material/snack-bar';
 import { UrlService } from '../shared/services/url.service';
 import { RecentLinksService } from '../shared/services/recent-links.service';
-import { RecentLink, ShortenResponse } from '../shared/models/short-url.model';
+import { ConfigService } from '../shared/services/config.service';
+import { RecentLink } from '../shared/models/short-url.model';
+import { IconComponent } from '../shared/components/icon.component';
+import { ShortLinkComponent } from '../shared/components/short-link.component';
 
 const ALIAS_PATTERN = /^[A-Za-z0-9_-]{3,50}$/;
+const RECENT_LIMIT = 5;
 
 @Component({
   selector: 'app-shorten',
   standalone: true,
-  imports: [
-    FormsModule,
-    RouterLink,
-    DatePipe,
-    MatFormFieldModule,
-    MatInputModule,
-    MatButtonModule,
-    MatIconModule,
-    MatProgressBarModule
-  ],
+  imports: [FormsModule, RouterLink, DatePipe, IconComponent, ShortLinkComponent],
   template: `
     <section class="page">
-      <header class="hero">
-        <h1>Encurte qualquer URL em <span>Base62</span>.</h1>
-        <p class="muted lead">
-          Códigos de 7 caracteres gerados por um contador atômico no Redis e ofuscados com Hashids,
-          persistidos no Cassandra e servidos com cache-aside.
-        </p>
-      </header>
-
-      <div class="surface composer">
-        <mat-form-field appearance="outline" class="url-field">
-          <mat-label>URL longa</mat-label>
-          <mat-icon matPrefix>link</mat-icon>
-          <input
-            matInput
-            placeholder="https://exemplo.com/uma/url/bem/comprida"
-            [ngModel]="longUrl()"
-            (ngModelChange)="longUrl.set($event)"
-            (keyup.enter)="submit()"
-            [disabled]="loading()"
-          />
-        </mat-form-field>
-        <button mat-flat-button color="primary" class="submit" (click)="submit()" [disabled]="loading()">
-          <mat-icon>bolt</mat-icon>
-          Encurtar
-        </button>
-        <mat-form-field appearance="outline" class="alias-field">
-          <mat-label>Palavra personalizada (opcional)</mat-label>
-          <span matTextPrefix class="mono alias-prefix">/</span>
-          <input
-            matInput
-            placeholder="minha-promo"
-            maxlength="50"
-            [ngModel]="alias()"
-            (ngModelChange)="alias.set($event)"
-            (keyup.enter)="submit()"
-            [disabled]="loading()"
-          />
-          @if (aliasError(); as message) {
-            <mat-hint class="alias-error">{{ message }}</mat-hint>
-          } @else {
-            <mat-hint>Deixe vazio para gerar um código automático. Letras, números, - e _.</mat-hint>
-          }
-        </mat-form-field>
+      <div class="title-row">
+        <div>
+          <h1>Encurtar link</h1>
+          <p class="subline">
+            @if (recent().length > 0) {
+              {{ recent().length }} {{ recent().length === 1 ? 'link criado' : 'links criados' }} neste navegador
+            } @else {
+              Links curtos em <span class="mono">{{ config.shortDomain() }}</span>
+            }
+          </p>
+        </div>
       </div>
 
-      @if (loading()) {
-        <mat-progress-bar mode="indeterminate"></mat-progress-bar>
-      }
+      <div class="workbench">
+        <form class="panel composer" (ngSubmit)="submit()" novalidate>
+          <div class="panel-head">
+            <h2>Novo link</h2>
+          </div>
 
-      @if (result(); as current) {
-        <div class="surface result">
-          <div class="result-head">
-            <mat-icon>check_circle</mat-icon>
-            <span>Link pronto</span>
+          <div class="field">
+            <label for="long-url">Endereço longo</label>
+            <input
+              id="long-url"
+              class="input"
+              name="longUrl"
+              type="url"
+              inputmode="url"
+              autocomplete="off"
+              placeholder="https://exemplo.com/uma/pagina/com/endereco/comprido"
+              [ngModel]="longUrl()"
+              (ngModelChange)="longUrl.set($event)"
+              [disabled]="loading()"
+              [attr.aria-invalid]="urlError() ? 'true' : null"
+              [attr.aria-describedby]="urlError() ? 'long-url-error' : null"
+            />
+            @if (urlError(); as message) {
+              <span id="long-url-error" class="hint error">{{ message }}</span>
+            }
           </div>
-          <a class="short mono" [href]="current.shortUrl" target="_blank" rel="noopener">{{ current.shortUrl }}</a>
-          <div class="result-actions">
-            <button mat-stroked-button (click)="copy(current.shortUrl)">
-              <mat-icon>content_copy</mat-icon>
-              Copiar
-            </button>
-            <a mat-stroked-button [href]="current.shortUrl" target="_blank" rel="noopener">
-              <mat-icon>open_in_new</mat-icon>
-              Abrir
-            </a>
-          </div>
-        </div>
-      }
 
-      @if (recent().length > 0) {
-        <div class="recent">
-          <div class="recent-head">
-            <h2>Recentes</h2>
-            <a routerLink="/painel">Ver painel de cliques</a>
-          </div>
-          @for (link of recent(); track link.shortCode) {
-            <div class="surface row">
-              <div class="row-main">
-                <a class="short mono" [href]="link.shortUrl" target="_blank" rel="noopener">{{ link.shortUrl }}</a>
-                <span class="muted origin">{{ link.longUrl }}</span>
-                <span class="muted when">{{ link.createdAt | date: 'dd/MM/yyyy HH:mm' }}</span>
-              </div>
-              <div class="row-actions">
-                <button mat-icon-button matTooltip="Copiar" (click)="copy(link.shortUrl)">
-                  <mat-icon>content_copy</mat-icon>
-                </button>
-                <button mat-icon-button (click)="remove(link.shortCode)">
-                  <mat-icon>close</mat-icon>
-                </button>
-              </div>
+          <div class="field">
+            <label for="alias">Palavra no link <span class="optional">opcional</span></label>
+            <div class="joined" [class.invalid]="aliasError()">
+              <span class="prefix mono" aria-hidden="true">{{ config.shortDomain() }}/</span>
+              <input
+                id="alias"
+                class="input mono"
+                name="alias"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                maxlength="50"
+                placeholder="minha-promo"
+                [ngModel]="alias()"
+                (ngModelChange)="alias.set($event)"
+                [disabled]="loading()"
+                [attr.aria-invalid]="aliasError() ? 'true' : null"
+                aria-describedby="alias-hint"
+              />
             </div>
+            <span id="alias-hint" class="hint" [class.error]="aliasError()">
+              {{ aliasError() ?? '3 a 50 caracteres: letras sem acento, números, - e _. Em branco, um código é gerado.' }}
+            </span>
+          </div>
+
+          @if (requestError(); as message) {
+            <div class="notice" role="alert">{{ message }}</div>
+          }
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary" [disabled]="loading()">
+              {{ loading() ? 'Encurtando…' : 'Encurtar' }}
+            </button>
+          </div>
+        </form>
+
+        <section class="panel result" aria-live="polite" aria-labelledby="result-title">
+          <div class="panel-head">
+            <h2 id="result-title">{{ result() ? 'Link pronto' : 'Seu link' }}</h2>
+            @if (result()) {
+              <span class="aside">agora</span>
+            }
+          </div>
+
+          @if (result(); as current) {
+            <a class="result-link" [href]="current.shortUrl" target="_blank" rel="noopener">
+              <app-short-link [domain]="domainOf(current.shortUrl)" [slug]="current.shortCode" />
+            </a>
+            <p class="destination" [title]="current.longUrl">leva para {{ current.longUrl }}</p>
+            <div class="result-actions">
+              <button type="button" class="btn btn-primary" (click)="copy(current.shortUrl, current.shortCode)">
+                <app-icon [name]="copiedCode() === current.shortCode ? 'check' : 'copy'" />
+                {{ copiedCode() === current.shortCode ? 'Copiado' : 'Copiar link' }}
+              </button>
+              <a class="btn btn-secondary" [href]="current.shortUrl" target="_blank" rel="noopener">
+                <app-icon name="open" />
+                Abrir
+              </a>
+            </div>
+          } @else {
+            <p class="result-link preview">
+              <app-short-link [domain]="config.shortDomain()" [slug]="previewSlug()" [pending]="!aliasIsUsable()" />
+            </p>
+            <p class="destination">
+              {{ aliasIsUsable() ? 'É assim que o link vai ficar.' : 'Sem palavra, o link recebe um código de 7 caracteres.' }}
+            </p>
+            @if (recent()[0]; as last) {
+              <div class="last">
+                <span class="last-label">Último criado {{ last.createdAt | date: 'dd/MM/yyyy, HH:mm' }}</span>
+                <a class="last-link" [href]="last.shortUrl" target="_blank" rel="noopener">
+                  <app-short-link [domain]="domainOf(last.shortUrl)" [slug]="last.shortCode" />
+                </a>
+                <span class="destination" [title]="last.longUrl">leva para {{ last.longUrl }}</span>
+              </div>
+              <div class="result-actions">
+                <button type="button" class="btn btn-secondary" (click)="copy(last.shortUrl, last.shortCode)">
+                  <app-icon [name]="copiedCode() === last.shortCode ? 'check' : 'copy'" />
+                  {{ copiedCode() === last.shortCode ? 'Copiado' : 'Copiar' }}
+                </button>
+                <a class="btn btn-secondary" [href]="last.shortUrl" target="_blank" rel="noopener">
+                  <app-icon name="open" />
+                  Abrir
+                </a>
+              </div>
+            } @else {
+              <dl class="facts">
+                <div>
+                  <dt>Fica salvo</dt>
+                  <dd>neste navegador, na lista de recentes</dd>
+                </div>
+                <div>
+                  <dt>Cliques</dt>
+                  <dd>contados a cada acesso, no <a class="link-action" routerLink="/painel">Painel</a></dd>
+                </div>
+                <div>
+                  <dt>Palavra em uso</dt>
+                  <dd>avisamos antes de criar, sem trocar o link de ninguém</dd>
+                </div>
+              </dl>
+            }
+          }
+        </section>
+      </div>
+
+      <section class="panel recent" aria-labelledby="recent-title">
+        <div class="panel-head">
+          <h2 id="recent-title">Recentes</h2>
+          @if (recent().length > 0) {
+            <a class="link-action" routerLink="/painel">Ver cliques de {{ recent().length === 1 ? '1 link' : 'todos os ' + recent().length }}</a>
           }
         </div>
-      }
+
+        @if (recent().length === 0) {
+          <p class="empty">Nenhum link criado neste navegador ainda. O primeiro aparece aqui.</p>
+        } @else {
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Link</th>
+                <th scope="col" class="col-dest">Destino</th>
+                <th scope="col" class="num col-date">Criado</th>
+                <th scope="col" class="col-actions"><span class="sr-only">Ações</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (link of visibleRecent(); track link.shortCode) {
+                <tr>
+                  <td class="col-link">
+                    <a [href]="link.shortUrl" target="_blank" rel="noopener">
+                      <app-short-link [domain]="foreignDomain(link.shortUrl)" [slug]="link.shortCode" />
+                    </a>
+                    <span class="sub">{{ link.longUrl }}</span>
+                  </td>
+                  <td class="col-dest"><span class="truncate" [title]="link.longUrl">{{ link.longUrl }}</span></td>
+                  <td class="num col-date">{{ link.createdAt | date: 'dd/MM/yyyy HH:mm' }}</td>
+                  <td class="col-actions">
+                    <button type="button" class="icon-btn" (click)="copy(link.shortUrl, link.shortCode)" [attr.aria-label]="'Copiar ' + link.shortCode">
+                      <app-icon [name]="copiedCode() === link.shortCode ? 'check' : 'copy'" />
+                    </button>
+                    <button type="button" class="icon-btn" (click)="remove(link.shortCode)" [attr.aria-label]="'Tirar ' + link.shortCode + ' da lista'">
+                      <app-icon name="close" />
+                    </button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          @if (recent().length > visibleRecent().length) {
+            <p class="more">Mostrando {{ visibleRecent().length }} de {{ recent().length }}. <a class="link-action" routerLink="/painel">Ver todos no painel</a></p>
+          }
+        }
+      </section>
     </section>
   `,
   styles: [`
-    .hero {
-      text-align: center;
-      margin: 18px 0 28px;
-    }
-    .hero h1 {
-      font-size: clamp(1.9rem, 4vw, 2.9rem);
-      line-height: 1.05;
-      margin: 0 0 12px;
-      font-weight: 800;
-    }
-    .hero h1 span {
-      color: var(--brand);
-    }
-    .lead {
-      max-width: 620px;
-      margin: 0 auto;
+    .workbench {
+      display: grid;
+      grid-template-columns: 7fr 5fr;
+      gap: var(--gap);
+      margin-bottom: var(--gap);
     }
     .composer {
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      align-items: flex-start;
-      padding: 16px;
+      flex-direction: column;
+      gap: 20px;
     }
-    .alias-field {
-      flex: 1 1 100%;
+    .composer .panel-head {
+      margin-bottom: 0;
     }
-    .alias-prefix {
+    .optional {
       color: var(--muted);
-      padding-right: 2px;
+      font-weight: 400;
+      margin-left: 4px;
     }
-    .alias-error {
-      color: #c62828;
-    }
-    .url-field {
-      flex: 1 1 auto;
-    }
-    .submit {
-      height: 56px;
-      padding: 0 22px;
-    }
-    .result {
-      margin-top: 16px;
-      padding: 20px;
+    .joined {
       display: flex;
-      flex-direction: column;
-      gap: 12px;
+      align-items: stretch;
     }
-    .result-head {
-      display: flex;
+    .prefix {
+      flex: none;
+      display: inline-flex;
       align-items: center;
-      gap: 8px;
-      font-weight: 600;
-      color: #1b8a4b;
+      padding: 0 10px 0 12px;
+      background: var(--raised);
+      border: 1px solid var(--control);
+      border-right: 0;
+      border-radius: var(--radius-control) 0 0 var(--radius-control);
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      max-width: 55%;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .short {
-      font-size: 1.15rem;
-      font-weight: 600;
-      word-break: break-all;
-    }
-    .result-actions {
-      display: flex;
-      gap: 10px;
-    }
-    .recent {
-      margin-top: 32px;
-    }
-    .recent-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .recent-head h2 {
-      font-size: 1.1rem;
-      margin: 0;
-    }
-    .row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px 14px;
-      margin-bottom: 10px;
-    }
-    .row-main {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
+    .joined .input {
+      border-radius: 0 var(--radius-control) var(--radius-control) 0;
       min-width: 0;
     }
-    .origin,
-    .when {
-      font-size: 0.82rem;
+    .joined.invalid .prefix {
+      border-color: var(--negative);
+    }
+    .actions {
+      display: flex;
+    }
+    .result {
+      display: flex;
+      flex-direction: column;
+    }
+    .result-link {
+      display: block;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      border-radius: 4px;
+    }
+    a.result-link:hover {
+      text-decoration: underline;
+      text-decoration-color: var(--control);
+      text-underline-offset: 6px;
+    }
+    .destination {
+      margin-top: 8px;
+      color: var(--muted);
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 540px;
     }
-    .row-actions {
+    .facts {
+      margin: auto 0 0;
+      padding-top: 20px;
+      border-top: 1px solid var(--rule);
+    }
+    .facts div {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 12px;
+      padding: 6px 0;
+    }
+    .facts dt {
+      color: var(--muted);
+    }
+    .facts dd {
+      margin: 0;
+    }
+    .last {
       display: flex;
-      flex-shrink: 0;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--rule);
+    }
+    .last-label {
+      color: var(--muted);
+      font-size: var(--fs-small);
+    }
+    .last-link {
+      font-size: 16px;
+      line-height: 24px;
+      border-radius: 4px;
+    }
+    .last .destination {
+      margin-top: 0;
+    }
+    .result-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
+      padding-top: 24px;
+    }
+    .recent .panel-head {
+      margin-bottom: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    th {
+      height: 36px;
+      text-align: left;
+      font-weight: 400;
+      font-size: var(--fs-small);
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      height: var(--row-height);
+      border-bottom: 1px solid var(--rule);
+      vertical-align: middle;
+    }
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+    th.num,
+    td.num {
+      text-align: right;
+    }
+    .col-link {
+      width: 40%;
+      padding-right: 16px;
+    }
+    .col-link a {
+      font-size: 15px;
+    }
+    .col-link a:hover {
+      text-decoration: underline;
+      text-decoration-color: var(--control);
+      text-underline-offset: 4px;
+    }
+    .col-link .sub {
+      display: none;
+    }
+    .col-dest {
+      padding-right: 16px;
+    }
+    .truncate {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+    .col-date {
+      width: 148px;
+      color: var(--muted);
+    }
+    .col-actions {
+      width: 84px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .more {
+      margin-top: 12px;
+      color: var(--muted);
+    }
+    @media (max-width: 900px) {
+      .workbench {
+        grid-template-columns: 1fr;
+      }
+      .result-actions {
+        padding-top: 20px;
+      }
     }
     @media (max-width: 640px) {
-      .composer {
-        flex-direction: column;
+      .result-link {
+        font-size: 18px;
+        line-height: 26px;
       }
-      .submit {
-        width: 100%;
+      .result-actions .btn {
+        flex: 1 1 0;
+      }
+      thead {
+        display: none;
+      }
+      .col-dest,
+      .col-date {
+        display: none;
+      }
+      .col-link {
+        width: auto;
+        padding: 10px 8px 10px 0;
+      }
+      .col-link .sub {
+        display: block;
+        margin-top: 2px;
+        font-size: var(--fs-small);
+        line-height: 16px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .col-actions {
+        width: 72px;
+      }
+      .icon-btn {
+        width: 36px;
+        height: 44px;
       }
     }
   `]
@@ -242,62 +445,91 @@ const ALIAS_PATTERN = /^[A-Za-z0-9_-]{3,50}$/;
 export class ShortenComponent {
   private readonly urlService = inject(UrlService);
   private readonly recentLinks = inject(RecentLinksService);
-  private readonly snackBar = inject(MatSnackBar);
+  protected readonly config = inject(ConfigService);
 
   readonly longUrl = signal('');
   readonly alias = signal('');
+  readonly loading = signal(false);
+  readonly submitted = signal(false);
+  readonly requestError = signal<string | null>(null);
+  readonly result = signal<RecentLink | null>(null);
+  readonly recent = signal<RecentLink[]>(this.recentLinks.list());
+  readonly copiedCode = signal<string | null>(null);
+
+  readonly visibleRecent = computed(() => this.recent().slice(0, RECENT_LIMIT));
+  readonly trimmedAlias = computed(() => this.alias().trim());
+  readonly aliasIsUsable = computed(() => ALIAS_PATTERN.test(this.trimmedAlias()));
+  readonly previewSlug = computed(() => (this.aliasIsUsable() ? this.trimmedAlias() : 'a1B2c3D'));
+
   readonly aliasError = computed(() => {
-    const alias = this.alias().trim();
+    const alias = this.trimmedAlias();
     if (!alias || ALIAS_PATTERN.test(alias)) {
       return null;
     }
-    return 'Use de 3 a 50 caracteres: letras sem acento, números, hífen ou underline.';
+    if (alias.length < 3) {
+      return 'Use pelo menos 3 caracteres.';
+    }
+    return 'Só letras sem acento, números, - e _ (até 50).';
   });
-  readonly loading = signal(false);
-  readonly result = signal<ShortenResponse | null>(null);
-  readonly recent = signal<RecentLink[]>(this.recentLinks.list());
+
+  readonly urlError = computed(() =>
+    this.submitted() && !this.longUrl().trim() ? 'Cole o endereço que você quer encurtar.' : null
+  );
 
   submit(): void {
+    this.submitted.set(true);
+    this.requestError.set(null);
     const url = this.longUrl().trim();
-    if (!url) {
-      this.snackBar.open('Informe uma URL para encurtar.', 'OK', { duration: 3000 });
-      return;
-    }
-    const aliasError = this.aliasError();
-    if (aliasError) {
-      this.snackBar.open(aliasError, 'OK', { duration: 4000 });
+    if (!url || this.aliasError()) {
       return;
     }
     this.loading.set(true);
-    this.urlService.shorten(url, this.alias().trim() || undefined).subscribe({
+    this.urlService.shorten(url, this.trimmedAlias() || undefined).subscribe({
       next: (response) => {
-        this.result.set(response);
         const link: RecentLink = {
           shortCode: response.shortCode,
           shortUrl: response.shortUrl,
           longUrl: url,
           createdAt: new Date().toISOString()
         };
+        this.result.set(link);
         this.recent.set(this.recentLinks.add(link));
         this.longUrl.set('');
         this.alias.set('');
+        this.submitted.set(false);
         this.loading.set(false);
       },
       error: (err) => {
         this.loading.set(false);
-        const message = err?.error?.message ?? 'Não foi possível encurtar a URL.';
-        this.snackBar.open(message, 'OK', { duration: 4000 });
+        this.requestError.set(err?.error?.message ?? 'Não foi possível encurtar agora. Tente de novo em instantes.');
       }
     });
   }
 
-  copy(value: string): void {
+  copy(value: string, code: string): void {
     navigator.clipboard.writeText(value).then(() => {
-      this.snackBar.open('Link copiado!', 'OK', { duration: 2000 });
+      this.copiedCode.set(code);
+      setTimeout(() => {
+        if (this.copiedCode() === code) {
+          this.copiedCode.set(null);
+        }
+      }, 1800);
     });
   }
 
   remove(shortCode: string): void {
     this.recent.set(this.recentLinks.remove(shortCode));
+    if (this.result()?.shortCode === shortCode) {
+      this.result.set(null);
+    }
+  }
+
+  foreignDomain(shortUrl: string): string {
+    const domain = this.domainOf(shortUrl);
+    return domain === this.config.shortDomain() ? '' : domain;
+  }
+
+  domainOf(shortUrl: string): string {
+    return shortUrl.replace(/^https?:\/\//, '').replace(/\/[^/]*$/, '');
   }
 }

@@ -1,163 +1,410 @@
 import { Component, computed, inject, signal } from '@angular/core';
+import { ConfigService } from '../shared/services/config.service';
 import { RouterLink } from '@angular/router';
 import { DatePipe, DecimalPipe } from '@angular/common';
-import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
-import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { forkJoin, of } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import { UrlService } from '../shared/services/url.service';
 import { RecentLinksService } from '../shared/services/recent-links.service';
-import { UrlStats } from '../shared/models/url-stats.model';
+import { RecentLink } from '../shared/models/short-url.model';
+import { IconComponent } from '../shared/components/icon.component';
+import { ShortLinkComponent } from '../shared/components/short-link.component';
 
-interface StatRow extends UrlStats {
+interface StatRow {
+  shortCode: string;
   shortUrl: string;
+  domain: string;
+  longUrl: string;
+  createdAt: string;
+  clicks: number | null;
 }
 
 @Component({
   selector: 'app-stats',
   standalone: true,
-  imports: [RouterLink, DatePipe, DecimalPipe, MatButtonModule, MatIconModule, MatProgressBarModule],
+  imports: [RouterLink, DatePipe, DecimalPipe, IconComponent, ShortLinkComponent],
   template: `
     <section class="page">
-      <header class="head">
+      <div class="title-row">
         <div>
-          <h1>Painel de cliques</h1>
-          <p class="muted">Estatísticas ao vivo dos links criados neste navegador.</p>
+          <h1>Painel</h1>
+          <p class="subline">
+            @if (links.length === 0) {
+              Os links criados neste navegador aparecem aqui com os cliques de cada um.
+            } @else if (loading() && rows().length === 0) {
+              Contando os cliques de {{ links.length }} {{ links.length === 1 ? 'link' : 'links' }}…
+            } @else if (top(); as leader) {
+              <span class="mono">/{{ leader.shortCode }}</span> é o mais acessado, com {{ leader.clicks | number }} de {{ totalClicks() | number }} cliques.
+            } @else {
+              Nenhum clique ainda nos {{ links.length }} {{ links.length === 1 ? 'link' : 'links' }} deste navegador.
+            }
+          </p>
         </div>
-        <button mat-stroked-button (click)="refresh()" [disabled]="loading()">
-          <mat-icon>refresh</mat-icon>
-          Atualizar
-        </button>
-      </header>
-
-      @if (loading()) {
-        <mat-progress-bar mode="indeterminate"></mat-progress-bar>
-      }
-
-      @if (rows().length > 0) {
-        <div class="summary surface">
-          <div class="metric">
-            <span class="value mono">{{ totalClicks() | number }}</span>
-            <span class="muted">cliques no total</span>
+        @if (links.length > 0) {
+          <div class="freshness">
+            @if (updatedAt(); as at) {
+              <span class="stamp">Atualizado às {{ at | date: 'HH:mm' }}</span>
+            }
+            <button type="button" class="btn btn-secondary" (click)="refresh()" [disabled]="loading()">
+              <app-icon name="refresh" />
+              {{ loading() ? 'Atualizando…' : 'Atualizar' }}
+            </button>
           </div>
-          <div class="metric">
-            <span class="value mono">{{ rows().length | number }}</span>
-            <span class="muted">links monitorados</span>
-          </div>
-        </div>
+        }
+      </div>
 
-        <div class="table surface">
-          <div class="trow thead">
-            <span>Short code</span>
-            <span>Destino</span>
-            <span>Criado</span>
-            <span class="num">Cliques</span>
+      @if (links.length === 0) {
+        <section class="panel first-run" aria-labelledby="first-run-title">
+          <h2 id="first-run-title">Nenhum link para acompanhar</h2>
+          <p class="subline">Encurte um endereço e volte aqui para ver quantas vezes ele foi aberto.</p>
+          <a class="btn btn-primary" routerLink="/">Encurtar um link</a>
+        </section>
+      } @else {
+        <div class="dash">
+        <section class="panel board" aria-labelledby="board-title">
+          <div class="board-head">
+            <h2 id="board-title">Cliques por link</h2>
+            <p class="aside">{{ links.length }} {{ links.length === 1 ? 'link' : 'links' }} em <span class="mono">{{ config.shortDomain() }}</span>, do mais ao menos acessado</p>
           </div>
-          @for (row of rows(); track row.shortCode) {
-            <div class="trow">
-              <a class="mono code" [href]="row.shortUrl" target="_blank" rel="noopener">{{ row.shortCode }}</a>
-              <span class="dest muted">{{ row.longUrl }}</span>
-              <span class="muted">{{ row.createdAt | date: 'dd/MM/yyyy HH:mm' }}</span>
-              <span class="num mono clicks">{{ row.clicks | number }}</span>
+
+          @if (failedCount() > 0) {
+            <div class="notice" role="status">
+              <span>Não deu para contar os cliques de {{ failedCount() }} {{ failedCount() === 1 ? 'link' : 'links' }}. Eles aparecem com um traço.</span>
+              <button type="button" class="link-action retry" (click)="refresh()">Tentar de novo</button>
             </div>
           }
-        </div>
-      } @else if (!loading()) {
-        <div class="surface empty">
-          <mat-icon>insights</mat-icon>
-          <p>Nenhum link ainda.</p>
-          <a mat-flat-button color="primary" routerLink="/">Encurtar uma URL</a>
+
+          <ol class="ranking">
+            @if (rows().length === 0) {
+              @for (link of links; track link.shortCode) {
+                <li class="row">
+                  <div class="identity">
+                    <span class="skeleton" style="width: 180px"></span>
+                    <span class="skeleton sub-skeleton" style="width: 260px"></span>
+                  </div>
+                  <span class="skeleton date-skeleton"></span>
+                  <span class="skeleton clicks-skeleton"></span>
+                </li>
+              }
+            } @else {
+              @for (row of rows(); track row.shortCode; let first = $first) {
+                <li class="row">
+                  <div class="identity">
+                    <a [href]="row.shortUrl" target="_blank" rel="noopener" class="code">
+                      <app-short-link [domain]="row.domain === config.shortDomain() ? '' : row.domain" [slug]="row.shortCode" />
+                    </a>
+                    <span class="dest" [title]="row.longUrl">{{ row.longUrl }}</span>
+                    <span class="track" aria-hidden="true">
+                      <span class="fill" [class.lead]="first && (row.clicks ?? 0) > 0" [style.width.%]="share(row)"></span>
+                    </span>
+                  </div>
+                  <span class="date num">{{ row.createdAt | date: 'dd/MM/yyyy' }}</span>
+                  <span class="clicks mono num" [class.zero]="row.clicks === 0" [class.missing]="row.clicks === null">
+                    @if (row.clicks === null) {
+                      <span aria-label="sem dados">—</span>
+                    } @else {
+                      {{ row.clicks | number }}
+                    }
+                  </span>
+                </li>
+              }
+            }
+          </ol>
+        </section>
+
+        <aside class="panel summary" aria-labelledby="summary-title">
+          <h2 id="summary-title">Resumo</h2>
+          <dl>
+            <div class="lead">
+              <dt>Cliques no total</dt>
+              <dd class="mono num">
+                @if (rows().length === 0) {
+                  <span class="skeleton total-skeleton"></span>
+                } @else {
+                  {{ totalClicks() | number }}
+                }
+              </dd>
+            </div>
+            <div>
+              <dt>Links com cliques</dt>
+              <dd class="mono num">
+                @if (rows().length === 0) {
+                  <span class="skeleton"></span>
+                } @else {
+                  {{ clickedCount() }} <span class="of">de {{ rows().length }}</span>
+                }
+              </dd>
+            </div>
+            <div>
+              <dt>Sem cliques ainda</dt>
+              <dd class="mono num">
+                @if (rows().length === 0) {
+                  <span class="skeleton"></span>
+                } @else {
+                  {{ unclickedCount() }}
+                }
+              </dd>
+            </div>
+            <div>
+              <dt>Sem dados</dt>
+              <dd class="mono num" [class.missing]="failedCount() === 0">
+                @if (rows().length === 0) {
+                  <span class="skeleton"></span>
+                } @else if (failedCount() === 0) {
+                  —
+                } @else {
+                  {{ failedCount() }}
+                }
+              </dd>
+            </div>
+          </dl>
+          <a class="btn btn-primary summary-action" routerLink="/">Encurtar outro link</a>
+        </aside>
         </div>
       }
     </section>
   `,
   styles: [`
-    .head {
+    .freshness {
       display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 16px;
-      margin: 12px 0 22px;
+      align-items: center;
+      gap: 12px;
     }
-    .head h1 {
-      margin: 0 0 4px;
-      font-size: 1.7rem;
-      font-weight: 800;
+    .stamp {
+      color: var(--muted);
+      font-size: var(--fs-small);
+      white-space: nowrap;
+    }
+    .first-run {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .first-run h2 {
+      font-size: var(--fs-section);
+      font-weight: 600;
+    }
+    .first-run .btn {
+      margin-top: 12px;
+    }
+    .dash {
+      display: grid;
+      grid-template-columns: minmax(0, 8fr) minmax(0, 4fr);
+      gap: var(--gap);
+      align-items: stretch;
+    }
+    .board {
+      padding-bottom: 8px;
+    }
+    .board-head {
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
     }
     .summary {
       display: flex;
-      gap: 40px;
-      padding: 20px 24px;
-      margin-bottom: 18px;
-    }
-    .metric {
-      display: flex;
       flex-direction: column;
     }
-    .metric .value {
-      font-size: 2rem;
-      font-weight: 700;
-      color: var(--brand);
+    .summary h2 {
+      font-size: var(--fs-section);
+      line-height: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
     }
-    .table {
-      overflow: hidden;
+    dl {
+      margin: 0 0 24px;
     }
-    .trow {
-      display: grid;
-      grid-template-columns: 130px 1fr 150px 90px;
-      gap: 14px;
-      align-items: center;
-      padding: 14px 18px;
-      border-bottom: 1px solid var(--border);
+    dl div {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--rule);
     }
-    .trow:last-child {
-      border-bottom: none;
+    dl div:last-child {
+      border-bottom: 0;
     }
-    .thead {
-      font-size: 0.74rem;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+    dt {
       color: var(--muted);
-      background: #f7fafe;
     }
-    .code {
+    dd {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+      text-align: right;
+    }
+    dd .of {
+      color: var(--muted);
+      font-family: var(--font);
+      font-weight: 400;
+    }
+    dd .skeleton {
+      width: 32px;
+      vertical-align: middle;
+    }
+    dd.missing {
+      color: var(--muted);
+      font-weight: 400;
+    }
+    dl .lead {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      padding-top: 4px;
+    }
+    dl .lead dd {
+      font-size: var(--fs-figure);
+      line-height: 36px;
+      letter-spacing: -0.02em;
+      text-align: left;
+    }
+    .summary-action {
+      margin-top: auto;
+      align-self: flex-start;
+    }
+    .board-head h2 {
+      font-size: var(--fs-section);
+      line-height: 24px;
       font-weight: 600;
     }
+    .board-head .aside {
+      color: var(--muted);
+      font-size: var(--fs-small);
+    }
+    .total-skeleton {
+      width: 64px;
+      height: 30px;
+      margin-top: 4px;
+    }
+    .notice {
+      margin-top: 16px;
+    }
+    .retry {
+      color: inherit;
+      background: none;
+      border: 0;
+      padding: 0;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .ranking {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 96px 72px;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--rule);
+    }
+    .row:last-child {
+      border-bottom: 0;
+    }
+    .identity {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .code {
+      font-size: 16px;
+      line-height: 22px;
+      border-radius: 4px;
+    }
+    .code:hover {
+      text-decoration: underline;
+      text-decoration-color: var(--control);
+      text-underline-offset: 4px;
+    }
     .dest {
+      color: var(--muted);
+      font-size: var(--fs-small);
+      line-height: 16px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .num {
+    .track {
+      display: block;
+      height: 3px;
+      margin-top: 8px;
+      max-width: 520px;
+    }
+    .fill {
+      display: block;
+      height: 100%;
+      border-radius: 2px;
+      background: #9aa0a6;
+    }
+    .fill.lead {
+      background: var(--hue);
+    }
+    .date {
       text-align: right;
-    }
-    .clicks {
-      font-weight: 700;
-      color: var(--ink);
-    }
-    .empty {
-      text-align: center;
-      padding: 48px 24px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-    }
-    .empty mat-icon {
-      font-size: 42px;
-      width: 42px;
-      height: 42px;
       color: var(--muted);
     }
-    @media (max-width: 640px) {
-      .trow {
-        grid-template-columns: 1fr 70px;
+    .clicks {
+      text-align: right;
+      font-size: 18px;
+      line-height: 24px;
+      font-weight: 500;
+    }
+    .clicks.zero,
+    .clicks.missing {
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .sub-skeleton {
+      height: 12px;
+      margin-top: 4px;
+      max-width: 100%;
+    }
+    .date-skeleton {
+      justify-self: end;
+      width: 80px;
+    }
+    .clicks-skeleton {
+      justify-self: end;
+      width: 32px;
+      height: 18px;
+    }
+    @media (max-width: 900px) {
+      .dash {
+        grid-template-columns: 1fr;
       }
-      .trow .dest,
-      .trow span:nth-child(3),
-      .thead span:nth-child(2),
-      .thead span:nth-child(3) {
+      .summary {
+        order: -1;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 16px;
+        margin-bottom: 16px;
+      }
+      dl .lead {
+        grid-column: 1 / -1;
+      }
+      dl div:nth-last-child(2) {
+        border-bottom: 0;
+      }
+    }
+    @media (max-width: 640px) {
+      .title-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .freshness {
+        justify-content: space-between;
+      }
+      .row {
+        grid-template-columns: minmax(0, 1fr) 64px;
+      }
+      .date,
+      .date-skeleton {
         display: none;
       }
     }
@@ -166,40 +413,65 @@ interface StatRow extends UrlStats {
 export class StatsComponent {
   private readonly urlService = inject(UrlService);
   private readonly recentLinks = inject(RecentLinksService);
+  protected readonly config = inject(ConfigService);
+
+  protected links: RecentLink[] = this.recentLinks.list();
 
   readonly loading = signal(false);
   readonly rows = signal<StatRow[]>([]);
-  readonly totalClicks = computed(() => this.rows().reduce((sum, row) => sum + row.clicks, 0));
+  readonly updatedAt = signal<Date | null>(null);
+
+  readonly totalClicks = computed(() => this.rows().reduce((sum, row) => sum + (row.clicks ?? 0), 0));
+  readonly failedCount = computed(() => this.rows().filter((row) => row.clicks === null).length);
+  readonly clickedCount = computed(() => this.rows().filter((row) => (row.clicks ?? 0) > 0).length);
+  readonly unclickedCount = computed(() => this.rows().filter((row) => row.clicks === 0).length);
+  readonly maxClicks = computed(() => Math.max(0, ...this.rows().map((row) => row.clicks ?? 0)));
+  readonly top = computed(() => {
+    const leader = this.rows()[0];
+    return leader && (leader.clicks ?? 0) > 0 ? leader : null;
+  });
 
   constructor() {
     this.refresh();
   }
 
   refresh(): void {
-    const links = this.recentLinks.list();
-    if (links.length === 0) {
+    this.links = this.recentLinks.list();
+    if (this.links.length === 0) {
       this.rows.set([]);
       return;
     }
     this.loading.set(true);
     forkJoin(
-      links.map((link) =>
+      this.links.map((link) =>
         this.urlService.getStats(link.shortCode).pipe(
-          map((stats) => ({ ...stats, shortUrl: link.shortUrl }) as StatRow),
-          catchError(() =>
-            of({
-              shortCode: link.shortCode,
-              longUrl: link.longUrl,
-              createdAt: link.createdAt,
-              clicks: 0,
-              shortUrl: link.shortUrl
-            } as StatRow)
-          )
+          map((stats) => this.toRow(link, stats.clicks, stats.createdAt)),
+          catchError(() => of(this.toRow(link, null, link.createdAt)))
         )
       )
     ).subscribe((results) => {
-      this.rows.set(results.sort((a, b) => b.clicks - a.clicks));
+      this.rows.set(results.sort((a, b) => (b.clicks ?? -1) - (a.clicks ?? -1)));
+      this.updatedAt.set(new Date());
       this.loading.set(false);
     });
+  }
+
+  share(row: StatRow): number {
+    const max = this.maxClicks();
+    if (!max || !row.clicks) {
+      return 0;
+    }
+    return (row.clicks / max) * 100;
+  }
+
+  private toRow(link: RecentLink, clicks: number | null, createdAt: string): StatRow {
+    return {
+      shortCode: link.shortCode,
+      shortUrl: link.shortUrl,
+      domain: link.shortUrl.replace(/^https?:\/\//, '').replace(/\/[^/]*$/, ''),
+      longUrl: link.longUrl,
+      createdAt,
+      clicks
+    };
   }
 }
