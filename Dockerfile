@@ -11,6 +11,7 @@ RUN npm run build -- --configuration=production
 FROM nginx:1.27-alpine AS runtime
 
 ENV BACKEND_URL=http://backend:8080
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist/url-shortener-frontend/browser/ /usr/share/nginx/html/
