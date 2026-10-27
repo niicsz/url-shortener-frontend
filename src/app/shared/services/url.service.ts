@@ -9,8 +9,8 @@ export class UrlService {
   private readonly http = inject(HttpClient);
   private readonly baseUrl = '/api/v1';
 
-  shorten(url: string): Observable<ShortenResponse> {
-    return this.http.post<ShortenResponse>(`${this.baseUrl}/shorten`, { url });
+  shorten(url: string, alias?: string): Observable<ShortenResponse> {
+    return this.http.post<ShortenResponse>(`${this.baseUrl}/shorten`, alias ? { url, alias } : { url });
   }
 
   getStats(shortCode: string): Observable<UrlStats> {

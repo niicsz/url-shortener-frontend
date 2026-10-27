@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { DatePipe } from '@angular/common';
@@ -11,6 +11,8 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { UrlService } from '../shared/services/url.service';
 import { RecentLinksService } from '../shared/services/recent-links.service';
 import { RecentLink, ShortenResponse } from '../shared/models/short-url.model';
+
+const ALIAS_PATTERN = /^[A-Za-z0-9_-]{3,50}$/;
 
 @Component({
   selector: 'app-shorten',
@@ -52,6 +54,24 @@ import { RecentLink, ShortenResponse } from '../shared/models/short-url.model';
           <mat-icon>bolt</mat-icon>
           Encurtar
         </button>
+        <mat-form-field appearance="outline" class="alias-field">
+          <mat-label>Palavra personalizada (opcional)</mat-label>
+          <span matTextPrefix class="mono alias-prefix">/</span>
+          <input
+            matInput
+            placeholder="minha-promo"
+            maxlength="50"
+            [ngModel]="alias()"
+            (ngModelChange)="alias.set($event)"
+            (keyup.enter)="submit()"
+            [disabled]="loading()"
+          />
+          @if (aliasError(); as message) {
+            <mat-hint class="alias-error">{{ message }}</mat-hint>
+          } @else {
+            <mat-hint>Deixe vazio para gerar um código automático. Letras, números, - e _.</mat-hint>
+          }
+        </mat-form-field>
       </div>
 
       @if (loading()) {
@@ -125,9 +145,20 @@ import { RecentLink, ShortenResponse } from '../shared/models/short-url.model';
     }
     .composer {
       display: flex;
+      flex-wrap: wrap;
       gap: 12px;
       align-items: flex-start;
       padding: 16px;
+    }
+    .alias-field {
+      flex: 1 1 100%;
+    }
+    .alias-prefix {
+      color: var(--muted);
+      padding-right: 2px;
+    }
+    .alias-error {
+      color: #c62828;
     }
     .url-field {
       flex: 1 1 auto;
@@ -214,6 +245,14 @@ export class ShortenComponent {
   private readonly snackBar = inject(MatSnackBar);
 
   readonly longUrl = signal('');
+  readonly alias = signal('');
+  readonly aliasError = computed(() => {
+    const alias = this.alias().trim();
+    if (!alias || ALIAS_PATTERN.test(alias)) {
+      return null;
+    }
+    return 'Use de 3 a 50 caracteres: letras sem acento, números, hífen ou underline.';
+  });
   readonly loading = signal(false);
   readonly result = signal<ShortenResponse | null>(null);
   readonly recent = signal<RecentLink[]>(this.recentLinks.list());
@@ -224,8 +263,13 @@ export class ShortenComponent {
       this.snackBar.open('Informe uma URL para encurtar.', 'OK', { duration: 3000 });
       return;
     }
+    const aliasError = this.aliasError();
+    if (aliasError) {
+      this.snackBar.open(aliasError, 'OK', { duration: 4000 });
+      return;
+    }
     this.loading.set(true);
-    this.urlService.shorten(url).subscribe({
+    this.urlService.shorten(url, this.alias().trim() || undefined).subscribe({
       next: (response) => {
         this.result.set(response);
         const link: RecentLink = {
@@ -236,6 +280,7 @@ export class ShortenComponent {
         };
         this.recent.set(this.recentLinks.add(link));
         this.longUrl.set('');
+        this.alias.set('');
         this.loading.set(false);
       },
       error: (err) => {
