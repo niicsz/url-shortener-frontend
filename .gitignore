@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.angular/
+.abacusai/
+out-tsc/
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
