@@ -1,60 +1,98 @@
-import { Component } from '@angular/core';
-import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
-import { MatToolbarModule } from '@angular/material/toolbar';
-import { MatButtonModule } from '@angular/material/button';
-import { MatIconModule } from '@angular/material/icon';
+import { Component, inject } from '@angular/core';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { ConfigService } from './shared/services/config.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive, MatToolbarModule, MatButtonModule, MatIconModule],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
-    <mat-toolbar class="topbar">
-      <a class="brand" routerLink="/">
-        <mat-icon>link</mat-icon>
-        <span>BiniTech <strong>Encurtador</strong></span>
-      </a>
-      <span class="spacer"></span>
-      <nav class="nav">
-        <a mat-button routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Encurtar</a>
-        <a mat-button routerLink="/painel" routerLinkActive="active">Painel</a>
-      </nav>
-    </mat-toolbar>
+    <header class="topbar">
+      <div class="bar">
+        <a class="brand" routerLink="/" aria-label="Encurtador, início">
+          <svg class="mark" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+            <rect width="22" height="22" rx="6" fill="#141414" />
+            <path d="M13.5 5.5 8.5 16.5" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+          <span class="name">Encurtador</span>
+          <span class="scope mono">{{ config.shortDomain() }}</span>
+        </a>
+        <nav class="nav" aria-label="Principal">
+          <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Encurtar</a>
+          <a routerLink="/painel" routerLinkActive="active">Painel</a>
+        </nav>
+      </div>
+    </header>
     <main>
       <router-outlet></router-outlet>
     </main>
   `,
   styles: [`
     .topbar {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      background: rgba(255, 255, 255, 0.85);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--border);
-      color: var(--ink);
-      height: 64px;
+      background: var(--ground);
+    }
+    .bar {
+      max-width: calc(var(--column) + 2 * var(--gutter));
+      margin: 0 auto;
+      padding: 0 var(--gutter);
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
     }
     .brand {
       display: flex;
       align-items: center;
       gap: 10px;
-      font-size: 1.05rem;
-      letter-spacing: 0.2px;
+      min-width: 0;
+      border-radius: 6px;
     }
-    .brand mat-icon {
-      color: var(--brand);
+    .mark {
+      flex: none;
     }
-    .brand strong {
-      color: var(--brand);
+    .name {
+      font-weight: 600;
+      font-size: 15px;
     }
-    .spacer {
-      flex: 1 1 auto;
+    .scope {
+      color: var(--muted);
+      font-size: var(--fs-small);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .nav {
+      display: flex;
+      gap: 4px;
+    }
+    .nav a {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 12px;
+      border-radius: var(--radius-control);
+      color: var(--muted);
+      font-weight: 500;
+      transition: background-color 120ms var(--ease), color 120ms var(--ease);
+    }
+    .nav a:hover {
+      color: var(--text);
     }
     .nav a.active {
-      color: var(--brand);
-      font-weight: 600;
+      background: var(--active);
+      color: var(--text);
+    }
+    @media (max-width: 480px) {
+      .scope {
+        display: none;
+      }
+      .nav a {
+        height: 44px;
+      }
     }
   `]
 })
-export class AppComponent {}
+export class AppComponent {
+  protected readonly config = inject(ConfigService);
+}

@@ -16,6 +16,12 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    location = /config.json {
+        default_type application/json;
+        add_header Cache-Control "no-cache";
+        return 200 '{"shortBaseUrl":"${SHORT_BASE_URL}"}';
+    }
+
     location / {
         try_files $uri $uri/ /index.html;
     }
